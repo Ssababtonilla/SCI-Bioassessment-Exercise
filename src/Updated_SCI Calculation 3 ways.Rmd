@@ -1,0 +1,190 @@
+---
+title: "SCI Calculation 3 ways"
+author: "Emma Jones"
+date: "5/18/2023"
+output: html_document
+---
+
+
+This script is a minimal reprex to allow data external to the Virginia DEQ CEDS EDAS system to be run through the VDEQ SCI calculations (VSCI, VCPMI + 63, VCPMI - 65). This script will analyze benthic data provided it matches the required templates and the taxa are contained within the example master taxa list. 
+Please contact Emma Jones (emma.jones@deq.virginia.gov) if you have questions about these procedures. 
+
+First, set up your environment.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+# built in R 3.6.2 but will work in newer R versions
+library(tidyverse)
+library(lubridate)
+```
+
+
+## Important functions
+
+These run the VSCI/VCPMI and are necessary to have in your environment. One day soon these will be distributed in a package. 
+
+```{r}
+source('VSCI_metrics_GENUS.R')
+source('VCPMI_metrics_GENUS.R')
+
+#and master SCI function that allows you to run whatever SCI you want easily
+# SCI calculation
+
+SCI <- function(stationBenthicsDateRange, SCIchoice, benSamps, masterTaxaGenus, vmast){
+  edas_options <- select(masterTaxaGenus, Class, Subclass, Order, Suborder, Superfamily, Family, `Final VA Family ID`, FinalID) %>%
+    mutate(across(where(is.factor), as.character))
+  edas_list <- select(edas_options, `Final VA Family ID`,FinalID)
+  # for Excluding taxa, need a list of all Family level designations that may end up as a FinalID
+  # these are all unique Family names and the few taxa that are the only 
+  GenusNames <- c(unique(edas_options$FinalID)[!is.na(unique(edas_options$FinalID))])
+  FamilyNames <- unique(edas_options$Family)[!is.na(unique(edas_options$Family))]
+  SuperfamilyNames <- unique(edas_options$Superfamily)[!is.na(unique(edas_options$Superfamily))]
+  SuborderNames <- unique(edas_options$Suborder)[!is.na(unique(edas_options$Suborder))]
+  OrderNames <- unique(edas_options$Order)[!is.na(unique(edas_options$Order))]
+  SubclassNames <- unique(edas_options$Subclass)[!is.na(unique(edas_options$Subclass))]
+  ClassNames <- unique(edas_options$Class)[!is.na(unique(edas_options$Class))]
+  
+  
+  EDASrare <- stationBenthicsDateRange %>%
+    ########## #filter(str_detect(BenSampID, 'R110') & RepNum == 1) %>% # keep only rarified data and Rep1's
+    mutate(Count = Individuals) %>% # Rename to match formatting of functions
+    ######`Excluded Taxa` = ifelse(`Excluded Taxa` == T, -1, 0)) %>% 
+    select(BenSampID, FinalID, Count, `Excluded Taxa`) %>%
+    mutate(GenusTaxaLevel = ifelse(FinalID %in% GenusNames, T, F),
+           FamilyTaxaLevel = ifelse(FinalID %in% FamilyNames, T, F),
+           SuperfamilyTaxaLevel = ifelse(FinalID %in% SuperfamilyNames, T, F),
+           SuborderTaxaLevel = ifelse(FinalID %in% SuborderNames, T, F),
+           OrderTaxaLevel = ifelse(FinalID %in% OrderNames, T, F),
+           SubclassTaxaLevel = ifelse(FinalID %in% SubclassNames, T, F),
+           ClassTaxaLevel = ifelse(FinalID %in% ClassNames, T, F))
+  
+  # Work FinalID back up to Family Level
+  EDASrare2 <- left_join(EDASrare,edas_list, by="FinalID") %>%
+    filter(!is.na(`Final VA Family ID`)) %>%
+    rename( `Genus Level Excluded Taxa` = `Excluded Taxa`)
+  
+
+source('rarifyFunction.R')
+
+  
+  # We also need to do a little data manipulation to incorporate biologist exclusion information appropriately.
+  exclusionMath  <- EDASrare2 %>%
+    mutate(`Family Level Excluded Taxa` = 
+             ifelse(`Genus Level Excluded Taxa` == -1, 
+                    ifelse(`SuperfamilyTaxaLevel` == TRUE | `SuborderTaxaLevel` == TRUE | `OrderTaxaLevel` == TRUE | 
+                             `SubclassTaxaLevel` == TRUE | `ClassTaxaLevel` == TRUE , -1, 0), 0 )) %>%
+    # had to get super ifelse nesty here to make this logic work, ugly but works
+    group_by(BenSampID, `Final VA Family ID`) %>%
+    summarise(`Family Level Count` = sum(Count), 
+              #`Genus Level Excluded Taxa` = sum(`Genus Level Excluded Taxa`),
+              `Family Level Taxa` = n(),
+              `Family Level Excluded Taxa` = sum(`Family Level Excluded Taxa`),
+              `Final Family Level Taxa` = `Family Level Taxa` + sum(`Family Level Excluded Taxa`) )
+  
+  # Join bug traits
+  bugTraits <- left_join(exclusionMath,vmast,by=c('Final VA Family ID') )
+  
+  
+  if(SCIchoice == 'VSCI'){SCI <- VSCIcalculation(bugTraits,exclusionMath,vmast) %>%
+    mutate(SCI = 'VSCI',
+           `SCI Threshold` = 60) %>% 
+    rename("SCI Score" ="Fam SCI")}
+  if(SCIchoice == 'VCPMI + 63'){SCI <- VCPMI63calculation(bugTraits,exclusionMath,vmast) %>%
+    mutate(SCI = 'VCPMI + 63',
+           `SCI Threshold` = 42) %>% 
+    rename("SCI Score" ="CPMI63+CHOWAN")}
+  if(SCIchoice == 'VCPMI - 65'){SCI <- VCPMI65calculation(bugTraits,exclusionMath,vmast) %>%
+    mutate(SCI = 'VCPMI - 65',
+           `SCI Threshold` = 42) %>% 
+    rename("SCI Score" ="CPMI65-CHOWAN")}
+  
+  SCI <- left_join(SCI, benSamps, by = 'BenSampID')
+  
+  return(SCI) 
+}
+```
+
+
+
+## Master Taxa list
+
+Bring in a master taxa list that contain genus level ID with a backtrack to family level as well as genus and family tolerance values, FFG, habit, etc. We will also manipulate it into a long format that will ensure we can run the SCI calculations efficiently. 
+
+
+
+```{r}
+masterTaxaGenus <- read.csv('masterTaxaGenus.csv') %>% 
+  rename(`Final VA Family ID` = 'Final.VA.Family.ID')
+
+vmast <- masterTaxaGenus %>%
+        # get Family level tolerance value, FFG
+        rename('GenusTolVal' = 'TolVal',
+               'TolVal' = 'FamTolVal',
+               'GenusFFG' = 'FFG',
+               'FFG' = 'FamFFG',
+               'GenusHabit' = 'Habit',
+               'Habit' = 'FamHabit') %>%
+        mutate(e=ifelse(Order=="Ephemeroptera", 1, 0),
+               p=ifelse(Order=="Plecoptera",1,0),
+               t=ifelse(Order=="Trichoptera", 1, 0),
+               tmin=ifelse((Order=="Trichoptera" & Family != "Hydropsychidae") | 
+                             (Order=="Trichoptera" & is.na(Family)) , 1, 0), 
+               ept=ifelse(e+p+t>0,1,0), 
+               scraper = ifelse(FFG=="Scraper", 1, 0),
+               chiro = ifelse(Family=="Chironomidae",1, 0),
+               ptmin = ifelse(p + tmin > 0,1,0),
+               `clinger-HS` = ifelse(Habit == 'Clinger' & ! Family %in% c("Hydropsychidae","Simuliidae"), 1, 0)) %>%
+        # Then put it in long format so it can be merged to and input taxa list
+        select(`Final VA Family ID`,TolVal, e,p,t, ept,ptmin, scraper, chiro,`clinger-HS`) %>% 
+        distinct(`Final VA Family ID`, .keep_all = T) %>% # drop multiple rows bc working back to family level data from genus
+        filter(!is.na(`Final VA Family ID`)) %>%
+        pivot_longer(-`Final VA Family ID`, names_to = 'metric', values_to = 'metric_val') %>%
+        #  pivot_longer(-`Final VA Family ID`, names_to = 'metric', values_to = 'metric_val') %>%
+        filter(!is.na(metric_val)) 
+
+```
+
+
+## Sample data 
+
+
+Bring in benthic sampling information that matches this template.  This can contain multiple sites and sample events. 
+
+
+```{r}
+stationBenSamps <- read_csv('stationInfoBenSampsTESTSITE.csv')
+```
+
+## Benthic Data
+
+Bring in benthic data as a separate object. This can contain multiple sites and sample events. 
+
+
+```{r}
+stationBenthics <- read_csv('stationBenthicsTESTSITE2.csv')
+```
+
+
+## SCI
+
+If you want to limit samples you want to run, do it now, otherwise do it after. The SCI() function let's you choose which method you want to run samples against.
+
+```{r}
+# Run data with VSCI
+SCIresults <- SCI(stationBenthics, "VSCI", stationBenSamps, masterTaxaGenus, vmast) %>%
+        mutate_if(is.numeric, round, digits=2) %>%# rounds all numeric columns to 2 decimal places
+        arrange(`Collection Date`)
+write.csv(SCIresults,"VASCI_rarefied.csv")
+
+# Run data with VCPMI + 63
+SCIresults <- SCI(stationBenthics, "VCPMI + 63", stationBenSamps, masterTaxaGenus, vmast) %>%
+        mutate_if(is.numeric, round, digits=2) %>%# rounds all numeric columns to 2 decimal places
+        arrange(`Collection Date`)
+
+# Run data with VCPMI - 65
+SCIresults <- SCI(stationBenthics, "VCPMI - 65", stationBenSamps, masterTaxaGenus, vmast) %>%
+        mutate_if(is.numeric, round, digits=2) %>%# rounds all numeric columns to 2 decimal places
+        arrange(`Collection Date`)
+```
+
+      

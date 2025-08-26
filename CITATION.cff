@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+title: "SCI Bioassessment Exercise (VSCI & VCPMI)"
+message: "If you use this repository, please cite it as below."
+type: software
+authors:
+  - family-names: "Sabat-Bonilla"
+    given-names: "Sergio A."
+  - family-names: "Jones"
+    given-names: "Emma"
+repository-code: "https://github.com/OWNER/REPO"
+license: MIT
+keywords: [macroinvertebrates, bioassessment, VSCI, VCPMI, Chesapeake, R, teaching]
