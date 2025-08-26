@@ -1,9 +1,4 @@
-
----
-
-## CITATION.cff
-
-```yaml
+# CITATION.cff
 cff-version: 1.2.0
 message: "If you use this repository, please cite it as below."
 type: software
@@ -39,12 +34,12 @@ abstract: >
   DEQ); she did not participate in creating this teaching exercise/repository.
 preferred-citation:
   type: software
+  title: "SCI Bioassessment Exercise (VSCI & VCPMI)"
+  version: "v1.0.0"
+  doi: "10.5281/zenodo.16952880"
+  date-released: "2025-08-26"
   authors:
     - family-names: "Sabat-Bonilla"
       given-names: "Sergio A."
     - family-names: "Entrekin"
       given-names: "Sally A."
-  title: "SCI Bioassessment Exercise (VSCI & VCPMI)"
-  version: "v1.0.0"
-  doi: "10.5281/zenodo.16952880"
-  date-released: "2025-08-26"
